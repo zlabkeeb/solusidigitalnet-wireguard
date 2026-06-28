@@ -22,7 +22,7 @@
 ## Install
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/solusidigitalnet-wireguard/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/solusidigitalnet-wireguard/main/wireguard.sh)
 ```
 
 > Jalankan sebagai **root** atau dengan **sudo**.
