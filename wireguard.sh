@@ -5,7 +5,7 @@
 # SolusiDigitalnet
 # ============================================
 
-set -e
+# set -e disabled - script handles errors gracefully
 
 # ── Colors ──────────────────────────────────
 RED='\033[0;31m'
@@ -178,10 +178,13 @@ do_wg_restart() {
     echo ""
     info "Merestart WireGuard..."
     wg-quick down wg0 2>/dev/null || true
-    local ERR
-    ERR=$(wg-quick up wg0 2>&1) || true
-    if echo "$ERR" | grep -qi "error\|unrecognized"; then
+    local RC=0
+    wg-quick up wg0 > /tmp/wg_up.log 2>&1 || RC=$?
+    if [[ $RC -ne 0 ]]; then
         fail "Config error! Merestore backup..."
+        cat /tmp/wg_up.log | while IFS= read -r line; do
+            echo -e "  ${GRAY}$line${NC}"
+        done
         if [[ -f "${WG_CONF}.bak" ]]; then
             cp "${WG_CONF}.bak" "$WG_CONF"
             wg-quick up wg0 &>/dev/null || true
@@ -205,10 +208,18 @@ do_install() {
     echo ""
 
     info "Update & install packages..."
-    (apt-get update -qq 2>/dev/null && \
-     apt-get install -y wireguard wireguard-tools iptables 2>/dev/null) &
-    spinner $! "Install WireGuard..."
-    wait $!
+    (apt-get update -qq 2>/tmp/wg_update.log || true; \
+     apt-get install -y wireguard wireguard-tools iptables) \
+     > /tmp/wg_install.log 2>&1 &
+    local INSTALL_PID=$!
+    spinner $INSTALL_PID "Install WireGuard..."
+    wait $INSTALL_PID || {
+        fail "Gagal install packages! Log:"
+        tail -20 /tmp/wg_install.log | while IFS= read -r line; do
+            echo -e "  ${GRAY}$line${NC}"
+        done
+        return 1
+    }
     ok "Packages terinstall"
 
     echo ""
@@ -395,8 +406,9 @@ list_clients_inline() {
         [[ -z "$ROUTES" ]] && ROUTES="${GRAY}(no extra routes)${NC}"
 
         i=$((i+1))
-        printf "  ${CYAN}%-4s${NC}${GREEN}%-22s${NC}${YELLOW}%-20s${NC}${GRAY}%s${NC}\n" \
-            "$i)" "$CLIENT" "$IP" "$ROUTES"
+        printf "  ${CYAN}%-4s${NC}${GREEN}%-22s${NC}${YELLOW}%-20s${NC}" \
+            "$i)" "$CLIENT" "$IP"
+        echo -e "${ROUTES}"
     done
     hr
     echo -e "  ${GRAY}Total: $(count_clients) client(s)${NC}"
@@ -511,22 +523,27 @@ _client_add_route() {
     cp "$WG_CONF" "${WG_CONF}.bak"
     local NEW_ROUTES="${CURRENT},${NETWORK}"
 
-    # Perbaiki: hanya update baris AllowedIPs milik client ini
-    local LINE_NO
-    LINE_NO=$(grep -n "# Client: $CLIENT_NAME" "$WG_CONF" | cut -d: -f1)
-    if [[ -z "$LINE_NO" ]]; then
-        fail "Client tidak ditemukan di config"
-        return
-    fi
-    local ALLOWED_LINE=$(( LINE_NO + 2 ))
-    sed -i "${ALLOWED_LINE}s|.*|AllowedIPs = ${NEW_ROUTES}|" "$WG_CONF"
+    # Update AllowedIPs menggunakan awk - lebih reliable dari sed
+    awk -v client="$CLIENT_NAME" -v routes="$NEW_ROUTES" '
+        /^# Client: / && $3 == client { found=1 }
+        found && /^AllowedIPs/ { $0 = "AllowedIPs = " routes; found=0 }
+        { print }
+    ' "$WG_CONF" > "${WG_CONF}.tmp" && mv "${WG_CONF}.tmp" "$WG_CONF"
 
     anim_dots "Mengaplikasikan route"
-    if do_wg_restart; then
-        ok "Route ${NETWORK} berhasil ditambahkan!"
-        info "AllowedIPs baru: ${NEW_ROUTES}"
+    local PUB
+    PUB=$(cat "${WG_CLIENTS}/${CLIENT_NAME}/public.key" 2>/dev/null || true)
+    if wg_is_running && [[ -n "$PUB" ]]; then
+        if do_wg_restart; then
+            ok "Route ${NETWORK} berhasil ditambahkan!"
+            info "AllowedIPs baru: ${NEW_ROUTES}"
+            info "Server perlu restart WG - client akan reconnect otomatis"
+        else
+            fail "Gagal restart WireGuard"
+            cp "${WG_CONF}.bak" "$WG_CONF"
+        fi
     else
-        fail "Gagal restart WireGuard"
+        fail "WireGuard tidak aktif, tidak bisa update route"
     fi
 }
 
@@ -545,7 +562,6 @@ _client_del_route() {
     local MAIN_IP
     MAIN_IP=$(echo "$CURRENT" | cut -d',' -f1)
 
-    # Daftar route yang bisa dihapus (exclude IP utama)
     local ROUTES
     ROUTES=$(echo "$CURRENT" | tr ',' '\n' | tail -n+2)
     if [[ -z "$ROUTES" ]]; then
@@ -572,7 +588,7 @@ _client_del_route() {
         warn "Dibatalkan"
         return
     fi
-    if [[ "$NUM" -lt 1 || "$NUM" -gt "${#ROUTE_ARR[@]}" ]] 2>/dev/null; then
+    if [[ "$NUM" -lt 1 || "$NUM" -gt "${#ROUTE_ARR[@]}" ]]; then
         fail "Nomor tidak valid"
         return
     fi
@@ -584,24 +600,33 @@ _client_del_route() {
     [[ "$confirm" != "yes" ]] && { warn "Dibatalkan"; return; }
 
     cp "$WG_CONF" "${WG_CONF}.bak"
-    # Build route baru tanpa network yang dihapus
     local NEW_ROUTES
     NEW_ROUTES=$(echo "$CURRENT" | tr ',' '\n' \
         | grep -v "^${NETWORK}$" \
         | tr '\n' ',' \
         | sed 's/,$//')
 
-    local LINE_NO
-    LINE_NO=$(grep -n "# Client: $CLIENT_NAME" "$WG_CONF" | cut -d: -f1)
-    local ALLOWED_LINE=$(( LINE_NO + 2 ))
-    sed -i "${ALLOWED_LINE}s|.*|AllowedIPs = ${NEW_ROUTES}|" "$WG_CONF"
+    # Update AllowedIPs menggunakan awk - lebih reliable dari sed
+    awk -v client="$CLIENT_NAME" -v routes="$NEW_ROUTES" '
+        /^# Client: / && $3 == client { found=1 }
+        found && /^AllowedIPs/ { $0 = "AllowedIPs = " routes; found=0 }
+        { print }
+    ' "$WG_CONF" > "${WG_CONF}.tmp" && mv "${WG_CONF}.tmp" "$WG_CONF"
 
     anim_dots "Mengaplikasikan perubahan"
-    if do_wg_restart; then
-        ok "Route ${NETWORK} dihapus!"
-        info "AllowedIPs baru: ${NEW_ROUTES}"
+    local PUB
+    PUB=$(cat "${WG_CLIENTS}/${CLIENT_NAME}/public.key" 2>/dev/null || true)
+    if wg_is_running && [[ -n "$PUB" ]]; then
+        if do_wg_restart; then
+            ok "Route ${NETWORK} dihapus!"
+            info "AllowedIPs baru: ${NEW_ROUTES}"
+            info "Server perlu restart WG - client akan reconnect otomatis"
+        else
+            fail "Gagal restart WireGuard"
+            cp "${WG_CONF}.bak" "$WG_CONF"
+        fi
     else
-        fail "Gagal restart WireGuard"
+        fail "WireGuard tidak aktif, tidak bisa update route"
     fi
 }
 
@@ -617,6 +642,10 @@ _client_show_mikrotik() {
     SERVER_PUB=$(cat /etc/wireguard/server_public.key 2>/dev/null || echo "N/A")
     PUBLIC_IP=$(get_public_ip)
 
+    # Format nama peer - replace dash with space untuk readability
+    local PEER_NAME="$CLIENT_NAME"
+    PEER_NAME="${PEER_NAME//-/ }"
+
     echo ""
     echo -e "  ${WHITE}${BOLD}Konfigurasi MikroTik untuk: ${CYAN}${CLIENT_NAME}${NC}"
     hr
@@ -625,21 +654,23 @@ _client_show_mikrotik() {
     echo -e "  ${CYAN}╔══════════════════════════════════════════════════════╗${NC}"
     echo ""
     echo -e "  ${GREEN}/interface wireguard${NC}"
-    echo -e "  add name=wg-${CLIENT_NAME} \\"
+    echo -e "  add name=${CLIENT_NAME} \\"
     echo -e "      listen-port=${SERVER_PORT} \\"
     echo -e "      private-key=\"${MT_PRIV}\""
     echo ""
     echo -e "  ${GREEN}/interface wireguard peers${NC}"
-    echo -e "  add interface=wg-${CLIENT_NAME} \\"
+    echo -e "  add interface=${CLIENT_NAME} \\"
     echo -e "      public-key=\"${SERVER_PUB}\" \\"
     echo -e "      endpoint-address=${PUBLIC_IP} \\"
     echo -e "      endpoint-port=${SERVER_PORT} \\"
     echo -e "      allowed-address=0.0.0.0/0 \\"
-    echo -e "      persistent-keepalive=25"
+    echo -e "      persistent-keepalive=25 \\"
+    echo -e "      comment=\"WG Peer: ${PEER_NAME}\""
     echo ""
     echo -e "  ${GREEN}/ip address${NC}"
     echo -e "  add address=${MT_IP} \\"
-    echo -e "      interface=wg-${CLIENT_NAME}"
+    echo -e "      interface=${CLIENT_NAME} \\"
+    echo -e "      comment=\"${PEER_NAME}\""
     echo ""
     echo -e "  ${CYAN}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
@@ -658,10 +689,14 @@ _client_delete() {
     fi
     cp "$WG_CONF" "${WG_CONF}.bak"
 
-    # Hapus blok peer (dari # Client: NAME sampai baris kosong berikutnya)
-    sed -i "/^# Client: ${CLIENT_NAME}$/,/^$/d" "$WG_CONF"
-    # Pastikan baris [Peer] sebelumnya juga terhapus
-    sed -i "/^\[Peer\]/{N;/# Client: ${CLIENT_NAME}/d}" "$WG_CONF" 2>/dev/null || true
+    # Hapus block client dari config menggunakan awk
+    awk -v client="$CLIENT_NAME" '
+        /^# Client: / && $3 == client { skip=1; next }
+        skip && /^$/ { skip=0; next }
+        skip { next }
+        { print }
+    ' "$WG_CONF" > "${WG_CONF}.tmp" && mv "${WG_CONF}.tmp" "$WG_CONF"
+    
     rm -rf "${WG_CLIENTS:?}/${CLIENT_NAME}"
 
     anim_dots "Menghapus client"
@@ -707,7 +742,6 @@ menu_client() {
                 sleep 1
                 ;;
             *)
-                # Pilih client berdasar nomor
                 local i=0
                 local TARGET=""
                 for dir in "${WG_CLIENTS}"/*/; do
@@ -766,7 +800,6 @@ add_client() {
     echo "$MT_PUB"  > "${WG_CLIENTS}/${CLIENT_NAME}/public.key"
     chmod 600 "${WG_CLIENTS}/${CLIENT_NAME}/private.key"
 
-    # Tulis ke wg0.conf
     cat >> "$WG_CONF" <<EOF
 
 # Client: ${CLIENT_NAME}
@@ -823,7 +856,6 @@ main_menu() {
     while true; do
         show_banner
 
-        # Status bar
         if wg_is_installed; then
             if wg_is_running; then
                 echo -e "  ${GREEN}● WireGuard  :  AKTIF${NC}   ${GRAY}│${NC}  Clients: ${CYAN}$(count_clients)${NC}   ${GRAY}│${NC}  Port: ${CYAN}${SERVER_PORT}${NC}"
