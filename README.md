@@ -31,13 +31,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/zlabkeeb/solusidigitalnet-wi
 
 ## Fitur
 
-- Banner ASCII + animasi spinner & progress bar
 - Install WireGuard server otomatis (Ubuntu/Debian)
 - Tambah client MikroTik — generate config RouterOS siap paste
 - Manage IP route per client langsung dari halaman detail
 - Kontrol WireGuard: aktifkan / matikan / restart / enable boot
 - Live peer status — last handshake & transfer stats
-- Auto backup `wg0.conf` sebelum setiap perubahan
 
 ---
 
