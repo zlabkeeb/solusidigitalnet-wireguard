@@ -1,4 +1,4 @@
-# WireGuard Manager — Didot404
+# WireGuard Manager — SolusiDigitalNet
 
 > Bash CLI tool untuk manage WireGuard VPS hub + MikroTik client provisioner.
 > Satu VPS sebagai hub, banyak MikroTik sebagai peer.
