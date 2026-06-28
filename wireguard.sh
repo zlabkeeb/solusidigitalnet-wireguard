@@ -48,7 +48,7 @@ show_banner() {
     echo "  ▒▒▒▒+   ▒▒  +▒▒▒▒+  ▒▒   +▒▒   +▒▒▒▒  +▒▒  ▒▒  +▒▒  +▒▒▒▒   +▒▒   "
     echo -e "${NC}"
     echo -e "${WHITE}  ╔══════════════════════════════════════════════════════╗${NC}"
-   echo -e "${WHITE}  ║${NC}   ${BOLD}${CYAN}SolusiDigitalNet${NC} ${GRAY}─${NC} WireGuard Manager ${YELLOW}v2.0${NC}      ${WHITE}║${NC}"
+    echo -e "${WHITE}  ║${NC}   ${BOLD}${CYAN}SolusiDigitalNet${NC} ${GRAY}─${NC} WireGuard Manager ${YELLOW}v2.0${NC}      ${WHITE}║${NC}"
     echo -e "${WHITE}  ║${NC}   ${GRAY}VPS Hub + MikroTik Client Provisioner${NC}              ${WHITE}║${NC}"
     echo -e "${WHITE}  ╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
