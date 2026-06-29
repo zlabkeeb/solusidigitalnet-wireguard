@@ -262,6 +262,22 @@ EOF
     wg-quick up wg0 2>/dev/null || true
     systemctl enable wg-quick@wg0 2>/dev/null || true
 
+    echo ""
+    info "Mengecek & menginstall cron..."
+    if ! command -v crontab &>/dev/null; then
+        apt-get install -y cron > /dev/null 2>&1
+        ok "Cron terinstall"
+    else
+        ok "Cron sudah terinstall"
+    fi
+
+    info "Membuat cron job untuk route management..."
+    cat > /etc/cron.d/wg-routes << 'EOF'
+* * * * * root /usr/bin/wg show wg0 allowed-ips | awk '{for(i=2;i<=NF;i++) print $i}' | grep -v '0.0.0.0/0' | while read r; do /usr/sbin/ip route show | grep -q "$r dev wg0" || /usr/sbin/ip route add $r dev wg0; done
+EOF
+    chmod 644 /etc/cron.d/wg-routes
+    ok "Cron job wg-routes dibuat"
+
     sep
     local PUBLIC_IP
     PUBLIC_IP=$(get_public_ip)
