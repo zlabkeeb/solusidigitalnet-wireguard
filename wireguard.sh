@@ -859,6 +859,8 @@ do_uninstall() {
     wg-quick down wg0 2>/dev/null || true
     systemctl disable wg-quick@wg0 2>/dev/null || true
     rm -rf /etc/wireguard
+    # Hapus isi cron job WireGuard tapi file tetap ada
+    > /etc/cron.d/wg-routes
     apt-get purge -y wireguard wireguard-tools 2>/dev/null || true
     ok "WireGuard berhasil diuninstall"
     echo ""
